@@ -1,0 +1,49 @@
+name: Deploy Runna para GitHub Pages
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar GitHub Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload arquivos
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy para GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Mostrar URL
+        run: |
+          echo "## ✅ App publicado!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**URL do app:** ${{ steps.deployment.outputs.page_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Próximo passo — gerar APK:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Acesse [PWABuilder](https://www.pwabuilder.com)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Cole a URL acima" >> $GITHUB_STEP_SUMMARY
+          echo "3. Clique em **Start** → **Android** → **Download**" >> $GITHUB_STEP_SUMMARY
