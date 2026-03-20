@@ -2454,7 +2454,7 @@ function exportWorkout(wi, format) {
 }
 
 // ---- GPX ----
-function downloadGPX(w) {
+async function downloadGPX(w) {
   const name = w.name + ' — Runna';
   const desc = [w.description, ...(w.steps||[]).map((s,i)=>`${i+1}. ${s.desc} @ ${s.pace}`)].join('\n');
   const now = new Date();
@@ -2492,7 +2492,7 @@ ${trkpts}
   </trk>
 </gpx>`;
 
-  triggerDownload(
+  await triggerDownload(
     new Blob([gpx], { type: 'application/gpx+xml' }),
     sanitizeFilename(w.name) + '.gpx'
   );
@@ -2571,7 +2571,7 @@ function escXml(s) {
 }
 
 // ---- FIT ----
-function downloadFIT(w) {
+async function downloadFIT(w) {
   const distKm = w.distance || (w.durationMin ? w.durationMin / 6 : 5);
   const durationSec = w.durationMin ? w.durationMin * 60 : Math.round(distKm * 360);
   const now = new Date();
@@ -2582,7 +2582,7 @@ function downloadFIT(w) {
 
   const buf = buildFITBuffer(w, distKm, durationSec, startTimestamp);
 
-  triggerDownload(
+  await triggerDownload(
     new Blob([buf], { type: 'application/octet-stream' }),
     sanitizeFilename(w.name) + '.fit'
   );
@@ -2798,7 +2798,42 @@ function fitCRC16(bytes) {
 }
 
 // ---- Shared helpers ----
-function triggerDownload(blob, filename) {
+async function triggerDownload(blob, filename) {
+  // 1) File System Access API (Chrome 86+ desktop, Android Chrome 109+)
+  if (window.showSaveFilePicker) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const typeMap = {
+      gpx: [{ description: 'GPX File', accept: { 'application/gpx+xml': ['.gpx'] } }],
+      fit: [{ description: 'FIT File', accept: { 'application/octet-stream': ['.fit'] } }],
+      png: [{ description: 'PNG Image', accept: { 'image/png': ['.png'] } }],
+    };
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: typeMap[ext] || [{ description: 'File', accept: { 'application/octet-stream': ['.' + ext] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return; // user cancelled
+      // fall through to next method
+    }
+  }
+
+  // 2) Web Share API with files (Android Chrome, Safari iOS 15+)
+  if (navigator.canShare && navigator.canShare({ files: [new File([blob], filename, { type: blob.type })] })) {
+    try {
+      await navigator.share({ files: [new File([blob], filename, { type: blob.type })], title: filename });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return; // user cancelled
+      // fall through
+    }
+  }
+
+  // 3) Classic anchor click (desktop browsers)
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = filename;
@@ -3790,7 +3825,6 @@ async function shareWorkoutCard(wi) {
   const sorted = [...state.currentWeekPlan.workouts].sort((a,b) => a.dayIndex - b.dayIndex);
   const w = sorted[wi];
   if (!w) return;
-  showToast('⏳ Gerando imagem…');
 
   const canvas = document.getElementById('share-canvas');
   const ctx = canvas.getContext('2d');
@@ -3886,21 +3920,31 @@ async function shareWorkoutCard(wi) {
   ctx.beginPath(); ctx.moveTo(80,H-22); ctx.lineTo(W-80,H-22); ctx.stroke();
 
   // Convert dataUrl to blob without fetch (fetch on data: URLs blocked in sandboxed iframes)
+  showToast('⏳ Gerando imagem…');
+  // yield to browser so toast renders before heavy canvas work
+  await new Promise(r => setTimeout(r, 50));
   const dataUrl = canvas.toDataURL('image/png');
   const blob2 = dataUrlToBlob(dataUrl);
+  const fname = `treino-${sanitizeFilename(w.name)}.png`;
+  const file2 = new File([blob2], fname, { type: 'image/png' });
 
-  if (navigator.share && navigator.canShare) {
-    try {
-      const file2 = new File([blob2], `treino-${sanitizeFilename(w.name)}.png`, {type:'image/png'});
-      if (navigator.canShare({files:[file2]})) {
-        await navigator.share({files:[file2], title:`Runna — ${w.name}`, text:`${w.name} · ${w.distance||''}km`});
+  // Try Web Share API with file (Android/iOS) — must be called ASAP after user gesture
+  if (navigator.share) {
+    const shareData = { files: [file2], title: `Runna — ${w.name}`, text: `${w.name} · ${w.distance || ''}km` };
+    const canShareFile = navigator.canShare && navigator.canShare(shareData);
+    if (canShareFile) {
+      try {
+        await navigator.share(shareData);
         return;
+      } catch (e) {
+        if (e.name === 'AbortError') return; // user cancelled
+        // other error: fall through to download
       }
-    } catch(shareErr) {
-      // Fall through to download
     }
   }
-  triggerDownload(blob2, `treino-${sanitizeFilename(w.name)}.png`);
+
+  // Fallback: download the image
+  await triggerDownload(blob2, fname);
   showToast('✓ Imagem do treino salva!');
 }
 
